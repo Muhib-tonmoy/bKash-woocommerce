@@ -12,6 +12,9 @@ jQuery(function($) {
   bkashBtn.style.display = "none";
   document.body.appendChild(bkashBtn);
 
+  let order_review = false;
+  let order_review_url;
+
   // wc_checkout_params is required to continue, ensure the object exists
   if (typeof wc_checkout_params === "undefined") {
     return false;
@@ -618,8 +621,20 @@ jQuery(function($) {
         });
       }
     },
-    submitOrder: function() {
+    submitOrder: function(e) {
       wc_checkout_form.blockOnSubmit($(this));
+      let method = $(this).find('input[name="payment_method"]:checked').val();
+
+      if (method === "bkash") {
+        e.preventDefault();
+        order_review = true;
+
+        let url = $(this).find('input[name="_wp_http_referer"]').val().match(/^.*\/(\d+)\/.*$/);
+        order_review_url = url[0];
+        let order_number = url[1];
+
+        bKashCheckout.init(order_number);
+      }
     },
     submit: function() {
       wc_checkout_form.reset_update_checkout_timer();
@@ -695,12 +710,7 @@ jQuery(function($) {
                 }
 
                 if (wc_checkout_form.get_payment_method() === "bkash") {
-                  bKashCheckout.init(
-                    redirectUrl,
-                    result.order_number,
-                    result.amount,
-                    result.order_number
-                  );
+                  bKashCheckout.init(result.order_number, result.checkout_order_pay);
                 } else {
                   window.location = redirectUrl;
                 }
@@ -780,124 +790,119 @@ jQuery(function($) {
   };
 
   var bKashCheckout = {
-    init: function(
-      redirectSuccessUrl,
+    init: async function(
       order_number,
-      amount,
-      merchantInvoiceNumber
+      redirect_url = false
     ) {
       loader.style.display = "block";
-      var paymentID;
-      let createCheckoutUrl =
-        "https://checkout.sandbox.bka.sh/v1.2.0-beta/checkout/payment/create";
-      let executeCheckoutUrl =
-        "https://checkout.sandbox.bka.sh/v1.2.0-beta/checkout/payment/execute";
+      let paymentID;
 
-      if (typeof bkash_params.headers !== "undefined") {
-        bKash.init({
-          paymentMode: "checkout",
-          paymentRequest: {
-            amount: amount,
+      let payment_request = await bKashCheckout.getPaymentRequestData(order_number);
+
+      bKash.init({
+        paymentMode: "checkout",
+        paymentRequest: payment_request,
+        createRequest: function(request) {
+          let create_payment_data = {
+            order_number: order_number,
+            action: "wc-bkash-create-payment-request",
+            _ajax_nonce: bkash_params.nonce
+          };
+
+          $.ajax({
+            url: wc_checkout_params.ajax_url,
+            method: "POST",
+            data: create_payment_data,
+            success: function(data) {
+              if (data.success && data.data.paymentID != null) {
+                data = data.data;
+                paymentID = data.paymentID;
+                bKash.create().onSuccess(data);
+              } else {
+                bKash.create().onError();
+                bKashCheckout.paymentError(redirect_url);
+              }
+            },
+            error: function(errorMessage) {
+              bKash.create().onError();
+              bKashCheckout.paymentError(redirect_url);
+            }
+          });
+        },
+        executeRequestOnAuthorization: function() {
+          let execute_payment_data = {
+            payment_id: paymentID,
+            order_number: order_number,
+            action: "wc-bkash-execute-payment-request",
+            _ajax_nonce: bkash_params.nonce
+          };
+
+          $.ajax({
+            url: wc_checkout_params.ajax_url,
+            method: "POST",
+            data: execute_payment_data,
+            success: async function(response) {
+              if (response.success && response.data.paymentID != null) {
+                let data = response.data;
+                window.location.href = data.order_success_url;
+              } else {
+                bKash.execute().onError(); //run clean up code
+                bKashCheckout.paymentError(redirect_url);
+              }
+            },
+            error: function() {
+              bKash.execute().onError(); // Run clean up code
+              bKashCheckout.paymentError(redirect_url);
+            }
+          });
+        },
+        onClose: function() {
+          loader.style.display = "none";
+          bKashCheckout.paymentError(redirect_url, 'bKash payment canceled.');
+        }
+      });
+      $("#bKash_button").removeAttr("disabled");
+      $("#bKash_button").click();
+    },
+    getPaymentRequestData: async function(order_number) {
+      return await bKashCheckout.getOrderAmount(order_number).then(response => {
+        if (response.success) {
+          return {
+            amount: response.data.amount,
             intent: "sale",
             currency: "BDT",
-            merchantInvoiceNumber: merchantInvoiceNumber
-          },
-          createRequest: function(request) {
-            if (typeof bkash_params.headers !== "undefined") {
-              $.ajax({
-                url: createCheckoutUrl,
-                type: "POST",
-                headers: bkash_params.headers,
-                contentType: "application/json",
-                data: JSON.stringify(request),
-                success: function(data) {
-                  if (data && data.paymentID != null) {
-                    paymentID = data.paymentID;
-                    bKash.create().onSuccess(data);
-                  } else {
-                    bKash.create().onError();
-                    alert(
-                      data.errorMessage +
-                        " Tag should be 2 digit, Length should be 2 digit, Value should be number of character                      mention in Length, ex.MI041234, supported tags are MI, MW, RF "
-                    );
-                  }
-                },
-                error: function(errorMessage) {
-                  bKash.create().onError();
-                }
-              });
-            }
-          },
-          executeRequestOnAuthorization: function() {
-            if (typeof bkash_params.headers !== "undefined") {
-              $.ajax({
-                url: executeCheckoutUrl,
-                type: "POST",
-                headers: bkash_params.headers,
-                contentType: "application/json",
-                data: JSON.stringify({
-                  paymentID: paymentID
-                }),
-                success: async function(data) {
-                  confirm(JSON.stringify(data));
-                  if (data && data.paymentID != null) {
-                    let paymentData = {
-                      payment_id: data.paymentID,
-                      trx_id: data.trxID,
-                      transaction_status: data.transactionStatus,
-                      invoice_number: data.merchantInvoiceNumber
-                    };
-
-                    await bKashCheckout.sendPaymentInfo(
-                      order_number,
-                      paymentData
-                    );
-                    window.location.href = redirectSuccessUrl;
-                  } else {
-                    bKash.execute().onError(); //run clean up code
-                  }
-                },
-                error: function() {
-                  bKash.execute().onError(); // Run clean up code
-                }
-              });
-            }
-          },
-          onClose: function() {}
-        });
-        $("#bKash_button").removeAttr("disabled");
-        $("#bKash_button").click();
-      } else {
-        wc_checkout_form.submit_error(
-          '<div class="woocommerce-error">bKash payment is not successfull</div>'
-        );
-        window.location.href = redirectSuccessUrl;
-      }
+            merchantInvoiceNumber: order_number
+          }
+        }
+      });
     },
-    sendPaymentInfo: async function(order_number, paymentInfo) {
-      var data = {
-        action: "wc-bkash-process",
+    getOrderAmount: function(order_number) {
+      let data = {
+        action: "wc-bkash-get-order-amount",
         _ajax_nonce: bkash_params.nonce,
         order_number: order_number,
-        payment_id: paymentInfo["payment_id"],
-        trx_id: paymentInfo["trx_id"],
-        transaction_status: paymentInfo["transaction_status"],
-        invoice_number: paymentInfo["invoice_number"]
       };
 
-      $.ajax({
+      return $.ajax({
         url: wc_checkout_params.ajax_url,
         data: data,
         method: "POST",
-        success: function(response) {
-          if (response.success) {
-            return true;
-          }
-        },
-        error: function(error) {
-          return true;
-        }
       });
+    },
+    paymentError: function (redirectUrl, errorText = false) {
+      if(! errorText) {
+        errorText = "bKash payment is not successfull";
+      }
+
+      wc_checkout_form.submit_error(
+          '<div class="woocommerce-error">' + errorText + '</div>'
+      );
+
+      if (order_review && order_review_url) {
+        redirectUrl = order_review_url;
+      }
+
+      window.location.href = redirectUrl;
     }
   };
 

@@ -23,42 +23,52 @@
 
 namespace Inc\Base;
 
-class BkashWoocommerceActivator
-{
+class BkashWoocommerceActivator {
 
-    /**
-     * Short Description. (use period)
-     *
-     * Long Description.
-     *
-     * @since    1.0.0
-     */
-    public static function do_install()
-    {
-        if (!self::has_woocommerce()) {
-            return;
-        }
+	/**
+	 * Short Description. (use period)
+	 *
+	 * Long Description.
+	 *
+	 * @since    1.0.0
+	 */
+	public static function do_install() {
+		if ( ! self::has_woocommerce() ) {
+			return;
+		}
 
-        self::install();
-    }
+		self::add_version();
+		self::install();
+	}
 
-    /**
-     * @return bool
-     */
-    public static function has_woocommerce()
-    {
-        return class_exists('WooCommerce');
-    }
+	/**
+	 * @return bool
+	 */
+	public static function has_woocommerce() {
+		return class_exists( 'WooCommerce' );
+	}
 
-    /**
-     * Install table for bkash
-     */
-    public static function install()
-    {
-        global $wpdb;
-        $table_name = $wpdb->prefix . 'bkash_transactions';
+	/**
+	 * Add time and version on DB
+	 */
+	public static function add_version() {
+		$installed = get_option( 'wcwpbkash_installed' );
 
-        $sql = "CREATE TABLE IF NOT EXISTS {$table_name} (
+		if ( ! $installed ) {
+			update_option( 'wcwpbkash_installed', time() );
+		}
+
+		update_option( 'wcwpbkash_version', WC_WP_BKASH_VERSION );
+	}
+
+	/**
+	 * Install table for bkash
+	 */
+	public static function install() {
+		global $wpdb;
+		$table_name = $wpdb->prefix . 'bkash_transactions';
+
+		$sql = "CREATE TABLE IF NOT EXISTS {$table_name} (
                   `id` int(11) unsigned NOT NULL AUTO_INCREMENT,
                   `payment_id` varchar(255) DEFAULT NULL,
                   `trx_id` varchar(255) DEFAULT NULL,
@@ -71,8 +81,8 @@ class BkashWoocommerceActivator
                   PRIMARY KEY (`id`)
                 ) ENGINE=InnoDB AUTO_INCREMENT=2 DEFAULT CHARSET=utf8;";
 
-        require_once ABSPATH . 'wp-admin/includes/upgrade.php';
-        dbDelta( $sql );
-    }
+		require_once ABSPATH . 'wp-admin/includes/upgrade.php';
+		dbDelta( $sql );
+	}
 
 }
